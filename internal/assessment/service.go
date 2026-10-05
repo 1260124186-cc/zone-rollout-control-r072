@@ -35,7 +35,7 @@ func (s *Service) Evaluate(
 			return domain.NotFound("plan", planID)
 		}
 		if plan.State == domain.PlanDraft {
-			return domain.InvalidState("plan must be active or completed for assessment", map[string]any{
+			return domain.InvalidState("plan must be active to create an assessment", map[string]any{
 				"plan_id": planID,
 				"state":   plan.State,
 			})
@@ -49,6 +49,16 @@ func (s *Service) Evaluate(
 			}
 			result = existing
 			return nil
+		}
+		if plan.State == domain.PlanCompleted {
+			details := map[string]any{
+				"plan_id": planID,
+				"state":   plan.State,
+			}
+			if plan.LatestAssessmentID != "" {
+				details["final_assessment_id"] = plan.LatestAssessmentID
+			}
+			return domain.PlanTerminal("plan is completed and its latest assessment is the final explanation", details)
 		}
 		if plan.LatestRevisionID == "" {
 			return domain.InvalidState("plan has no zone revision", map[string]any{

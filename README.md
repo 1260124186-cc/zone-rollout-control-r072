@@ -188,6 +188,7 @@ curl -sS -X PATCH http://127.0.0.1:8090/v1/plans/<plan_id>/assessments \
 - 一个节点同一时刻最多有一个 `claimed` 租约。
 - 相同请求键和相同内容可安全重放；同键异载荷返回 `idempotency_conflict`。
 - 一致性判定综合节点覆盖率、序列号、成功比例和最大延迟，返回 `consistent` 或 `review_required`。
+- 计划完成后判定进入终态：`latest_assessment_id` 冻结为最终上线解释，新请求键创建判定返回 `plan_terminal`（HTTP 409），已完成的请求键重放仍返回原判定，`GET .../assessments/latest` 持续可查。完成后不存在补判定通道，最终结论不会被覆盖。
 - 所有校验和冲突在快照替换前返回，不留下部分状态。
 
 ## 后续工程任务的行为边界

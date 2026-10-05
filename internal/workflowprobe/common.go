@@ -71,6 +71,18 @@ func allocate(
 	return group, err
 }
 
+func completePlan(harness *harness, planID string) (domain.RolloutPlan, error) {
+	var current domain.RolloutPlan
+	if err := harness.call(http.MethodGet, "/v1/plans/"+planID, nil, &current); err != nil {
+		return domain.RolloutPlan{}, err
+	}
+	var completed domain.RolloutPlan
+	err := harness.call(http.MethodPatch, "/v1/plans/"+planID+"/complete", map[string]any{
+		"expected_version": current.Version,
+	}, &completed)
+	return completed, err
+}
+
 func submitProbe(
 	harness *harness,
 	leaseID string,

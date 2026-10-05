@@ -26,7 +26,7 @@ Zone Rollout Control 是面向 DNS 运维人员的 Go HTTP 控制面。它把区
 - `expected_nodes`：计划预期参与的节点数，范围为 1 到 500。
 - `version`：每次计划聚合变化后递增。
 - `latest_revision_id`：最近一次添加的区域版本。
-- `latest_assessment_id`：最近一次完成的一致性判定。
+- `latest_assessment_id`：最近一次完成的一致性判定；计划完成后冻结，成为最终上线解释。
 - `created_at`、`activated_at`、`completed_at`：RFC3339 时间。
 
 ### ZoneRevision
@@ -94,6 +94,7 @@ draft --activate--> active --complete--> completed
 - 只有 `active` 可以完成。
 - 激活后不能继续添加区域版本。
 - 激活和完成需要匹配当前版本。
+- 计划完成后进入判定终态：`latest_assessment_id` 冻结为最终解释，不再接受新判定。
 
 ### 节点与租约生命周期
 
@@ -141,6 +142,14 @@ ready --lease--> leased --report--> ready
 - `serial_mismatch`
 - `success_ratio_below_minimum`
 - `latency_limit_exceeded`
+
+### 判定终态
+
+- 计划完成时，`latest_assessment_id` 指向的判定成为最终上线解释，之后不再变化。
+- 完成后使用新请求键创建判定返回 `plan_terminal`（HTTP 409），错误详情的 `final_assessment_id` 指向最终判定（存在时）。
+- 完成后重放已完成的请求键仍返回原判定，不产生新记录，也不改变计划摘要。
+- 历史判定通过 `GET /v1/plans/{id}/assessments/latest` 持续可查。
+- 实现不提供完成后补判定的例外通道：最终结论不会被覆盖、替换或静默续写。
 
 ## 5. 工作流
 
@@ -210,7 +219,7 @@ ready --lease--> leased --report--> ready
 
 成功行为：返回确定性的 `consistent` 或 `review_required`。
 
-失败行为：缺少区域版本、没有探针、请求键冲突或保存失败不会更新计划摘要。
+失败行为：缺少区域版本、没有探针、请求键冲突或保存失败不会更新计划摘要。计划完成后，新请求键返回 `plan_terminal`，已完成的请求键重放仍返回原判定。
 
 ## 6. 模块边界
 
@@ -281,6 +290,6 @@ ready --lease--> leased --report--> ready
 1. 计划创建、版本追加、激活、完成和非法重复迁移。
 2. 节点分配、租约唯一性、幂等重放和无可用节点冲突。
 3. 探针首写、同键重放、同键异载荷冲突和释放冲突。
-4. 一致性通过、审核触发、最新结果查询和幂等重放。
+4. 一致性通过、审核触发、最新结果查询、幂等重放和完成后终态拒绝。
 
 每条探针使用独立临时目录，不访问外部网络，结束后关闭服务。

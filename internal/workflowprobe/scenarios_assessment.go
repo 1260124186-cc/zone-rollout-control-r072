@@ -61,6 +61,57 @@ func runConsistencyAssessment() error {
 		return ensure(false, "latest assessment does not match")
 	}
 
+	completed, err := completePlan(harness, plan.ID)
+	if err != nil {
+		return err
+	}
+	if completed.State != domain.PlanCompleted {
+		return ensure(false, "plan did not complete")
+	}
+	var completedReplay domain.RolloutAssessment
+	if err := harness.call(http.MethodPatch, "/v1/plans/"+plan.ID+"/assessments", domain.AssessmentInput{
+		RequestKey: "assess-request-0001",
+	}, &completedReplay); err != nil {
+		return err
+	}
+	if completedReplay.ID != consistent.ID {
+		return ensure(false, "completed plan did not replay the stored assessment")
+	}
+	err = harness.call(http.MethodPatch, "/v1/plans/"+plan.ID+"/assessments", domain.AssessmentInput{
+		RequestKey: "assess-request-0002",
+	}, nil)
+	if err := expectFailure(err, http.StatusConflict, string(domain.CodePlanTerminal)); err != nil {
+		return err
+	}
+	var finalLatest domain.RolloutAssessment
+	if err := harness.call(http.MethodGet, "/v1/plans/"+plan.ID+"/assessments/latest", nil, &finalLatest); err != nil {
+		return err
+	}
+	if finalLatest.ID != consistent.ID {
+		return ensure(false, "final assessment changed after completion")
+	}
+	var frozen domain.RolloutPlan
+	if err := harness.call(http.MethodGet, "/v1/plans/"+plan.ID, nil, &frozen); err != nil {
+		return err
+	}
+	if frozen.LatestAssessmentID != consistent.ID {
+		return ensure(false, "plan latest assessment pointer moved after completion")
+	}
+
+	quietPlan, _, err := createActivePlan(harness, "quiet.example", 5001, 1, 1, 20)
+	if err != nil {
+		return err
+	}
+	if _, err := completePlan(harness, quietPlan.ID); err != nil {
+		return err
+	}
+	err = harness.call(http.MethodPatch, "/v1/plans/"+quietPlan.ID+"/assessments", domain.AssessmentInput{
+		RequestKey: "quiet-request-0001",
+	}, nil)
+	if err := expectFailure(err, http.StatusConflict, string(domain.CodePlanTerminal)); err != nil {
+		return err
+	}
+
 	reviewPlan, reviewRevision, err := createActivePlan(harness, "review.example", 4001, 1, 1, 20)
 	if err != nil {
 		return err
