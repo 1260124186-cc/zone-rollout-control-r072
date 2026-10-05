@@ -36,6 +36,10 @@ func CompletePlan(plan *RolloutPlan, now time.Time) error {
 	}
 	plan.State = PlanCompleted
 	plan.CompletedAt = timePointer(now.UTC())
+	// The assessment matched at completion becomes the immutable final
+	// interpretation of the rollout. It is captured separately from the
+	// latest pointer so post-completion supplements can never overwrite it.
+	plan.FinalAssessmentID = plan.LatestAssessmentID
 	plan.Version++
 	return nil
 }

@@ -157,9 +157,21 @@ func (s *Service) Complete(
 		if err := domain.CompletePlan(&current, now); err != nil {
 			return err
 		}
+		// Freeze the assessment matched at completion as the final record.
+		if current.FinalAssessmentID != "" {
+			final, ok := state.Assessments[current.FinalAssessmentID]
+			if !ok {
+				return domain.NewError(domain.CodeStorageFailure, "plan references a missing final assessment", map[string]any{
+					"assessment_id": current.FinalAssessmentID,
+				})
+			}
+			final.Final = true
+			state.Assessments[final.ID] = final
+		}
 		state.Plans[planID] = current
 		store.AddAudit(state, s.ids, "plan", planID, "completed", now, map[string]any{
-			"version": current.Version,
+			"version":             current.Version,
+			"final_assessment_id": current.FinalAssessmentID,
 		})
 		plan = current
 		return nil

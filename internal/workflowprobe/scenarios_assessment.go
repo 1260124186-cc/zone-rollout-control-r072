@@ -44,6 +44,9 @@ func runConsistencyAssessment() error {
 	if consistent.Verdict != domain.VerdictConsistent || consistent.ProbeCount != 2 {
 		return ensure(false, "consistent assessment did not include both probes")
 	}
+	if consistent.Final || consistent.Supplemental {
+		return ensure(false, "pre-completion assessment must not be flagged final or supplemental")
+	}
 	var replay domain.RolloutAssessment
 	if err := harness.call(http.MethodPatch, "/v1/plans/"+plan.ID+"/assessments", domain.AssessmentInput{
 		RequestKey: "assess-request-0001",
@@ -59,6 +62,102 @@ func runConsistencyAssessment() error {
 	}
 	if latest.ID != consistent.ID {
 		return ensure(false, "latest assessment does not match")
+	}
+
+	if err := completePlan(harness, plan.ID); err != nil {
+		return err
+	}
+
+	// The matched assessment is frozen as the final interpretation.
+	var finalView domain.RolloutAssessment
+	if err := harness.call(http.MethodGet, "/v1/plans/"+plan.ID+"/assessments/latest", nil, &finalView); err != nil {
+		return err
+	}
+	if finalView.ID != consistent.ID || !finalView.Final {
+		return ensure(false, "latest after completion is not the frozen final assessment")
+	}
+	var completedPlan domain.RolloutPlan
+	if err := harness.call(http.MethodGet, "/v1/plans/"+plan.ID, nil, &completedPlan); err != nil {
+		return err
+	}
+	if completedPlan.FinalAssessmentID != consistent.ID ||
+		completedPlan.LatestAssessmentID != consistent.ID {
+		return ensure(false, "plan did not freeze the matched assessment as final")
+	}
+	versionAfterCompletion := completedPlan.Version
+
+	// The completed request key can still be replayed after completion.
+	var replayAfterCompletion domain.RolloutAssessment
+	if err := harness.call(http.MethodPatch, "/v1/plans/"+plan.ID+"/assessments", domain.AssessmentInput{
+		RequestKey: "assess-request-0001",
+	}, &replayAfterCompletion); err != nil {
+		return err
+	}
+	if replayAfterCompletion.ID != consistent.ID || !replayAfterCompletion.Final {
+		return ensure(false, "completed request key did not replay the final assessment")
+	}
+
+	// A new request key is rejected with a terminal error and changes nothing.
+	err = harness.call(http.MethodPatch, "/v1/plans/"+plan.ID+"/assessments", domain.AssessmentInput{
+		RequestKey: "assess-request-0002",
+	}, nil)
+	if err := expectFailure(err, http.StatusConflict, string(domain.CodePlanTerminal)); err != nil {
+		return err
+	}
+
+	// The controlled exception requires an explicit opt-in and records a
+	// supplemental assessment that never replaces the final interpretation.
+	var supplemental domain.RolloutAssessment
+	if err := harness.call(http.MethodPatch, "/v1/plans/"+plan.ID+"/assessments", domain.AssessmentInput{
+		RequestKey:                    "assess-request-0003",
+		AllowPostCompletionSupplement: true,
+	}, &supplemental); err != nil {
+		return err
+	}
+	if supplemental.ID == consistent.ID || !supplemental.Supplemental || supplemental.Final {
+		return ensure(false, "supplemental assessment was not recorded separately")
+	}
+	var supplementalReplay domain.RolloutAssessment
+	if err := harness.call(http.MethodPatch, "/v1/plans/"+plan.ID+"/assessments", domain.AssessmentInput{
+		RequestKey:                    "assess-request-0003",
+		AllowPostCompletionSupplement: true,
+	}, &supplementalReplay); err != nil {
+		return err
+	}
+	if supplementalReplay.ID != supplemental.ID {
+		return ensure(false, "supplemental request key did not replay its record")
+	}
+	var latestAfterSupplement domain.RolloutAssessment
+	if err := harness.call(http.MethodGet, "/v1/plans/"+plan.ID+"/assessments/latest", nil, &latestAfterSupplement); err != nil {
+		return err
+	}
+	if latestAfterSupplement.ID != consistent.ID {
+		return ensure(false, "supplemental assessment overwrote the final latest view")
+	}
+	var planAfterSupplement domain.RolloutPlan
+	if err := harness.call(http.MethodGet, "/v1/plans/"+plan.ID, nil, &planAfterSupplement); err != nil {
+		return err
+	}
+	if planAfterSupplement.Version != versionAfterCompletion ||
+		planAfterSupplement.LatestAssessmentID != consistent.ID ||
+		planAfterSupplement.FinalAssessmentID != consistent.ID {
+		return ensure(false, "supplemental assessment mutated the completed plan summary")
+	}
+
+	// History remains queryable and contains every stored assessment.
+	var history domain.AssessmentPage
+	if err := harness.call(http.MethodGet, "/v1/plans/"+plan.ID+"/assessments", nil, &history); err != nil {
+		return err
+	}
+	if len(history.Items) != 2 {
+		return ensure(false, fmt.Sprintf("history should contain final and supplemental, got %d", len(history.Items)))
+	}
+	historyIDs := map[string]bool{}
+	for _, item := range history.Items {
+		historyIDs[item.ID] = true
+	}
+	if !historyIDs[consistent.ID] || !historyIDs[supplemental.ID] {
+		return ensure(false, "history is missing the final or supplemental assessment")
 	}
 
 	reviewPlan, reviewRevision, err := createActivePlan(harness, "review.example", 4001, 1, 1, 20)
@@ -89,4 +188,15 @@ func runConsistencyAssessment() error {
 		return ensure(false, "mismatched serial did not require review")
 	}
 	return nil
+}
+
+func completePlan(harness *harness, planID string) error {
+	var current domain.RolloutPlan
+	if err := harness.call(http.MethodGet, "/v1/plans/"+planID, nil, &current); err != nil {
+		return err
+	}
+	var completed domain.RolloutPlan
+	return harness.call(http.MethodPatch, "/v1/plans/"+planID+"/complete", map[string]any{
+		"expected_version": current.Version,
+	}, &completed)
 }

@@ -48,8 +48,24 @@ func runPlanRevisionLifecycle() error {
 	if completed.State != domain.PlanCompleted {
 		return ensure(false, "plan did not complete")
 	}
+	if completed.FinalAssessmentID != "" {
+		return ensure(false, "plan without a matched assessment must not invent a final")
+	}
 	err = harness.call(http.MethodPatch, "/v1/plans/"+plan.ID+"/complete", map[string]any{
 		"expected_version": completed.Version,
 	}, nil)
-	return expectFailure(err, http.StatusConflict, string(domain.CodeInvalidState))
+	if err := expectFailure(err, http.StatusConflict, string(domain.CodeInvalidState)); err != nil {
+		return err
+	}
+
+	// Completing without an assessment freezes the plan: new assessment
+	// request keys are rejected and no latest verdict can be established.
+	err = harness.call(http.MethodPatch, "/v1/plans/"+plan.ID+"/assessments", domain.AssessmentInput{
+		RequestKey: "edge-assess-0001",
+	}, nil)
+	if err := expectFailure(err, http.StatusConflict, string(domain.CodePlanTerminal)); err != nil {
+		return err
+	}
+	err = harness.call(http.MethodGet, "/v1/plans/"+plan.ID+"/assessments/latest", nil, nil)
+	return expectFailure(err, http.StatusNotFound, string(domain.CodeNotFound))
 }

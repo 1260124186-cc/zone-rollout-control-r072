@@ -44,7 +44,7 @@ internal/plan               计划及区域版本服务
 internal/fleet              解析节点档案服务
 internal/allocation         节点选择和租约生命周期
 internal/probe              探针登记、幂等重放和租约完成
-internal/assessment         一致性聚合和最新结果查询
+internal/assessment         一致性聚合、最终判定冻结和历史查询
 internal/httpapi            HTTP 路由、中间件和响应映射
 internal/workflowprobe      真实 HTTP 路径验证
 ```
@@ -176,8 +176,9 @@ curl -sS -X PATCH http://127.0.0.1:8090/v1/plans/<plan_id>/assessments \
 | `PATCH` | `/v1/plans/{id}/leases` | 给节点分配租约 |
 | `PATCH` | `/v1/leases/{id}/release` | 提前释放租约 |
 | `PATCH` | `/v1/leases/{id}/probes` | 登记探针并完成租约 |
-| `PATCH` | `/v1/plans/{id}/assessments` | 创建一致性判定 |
-| `GET` | `/v1/plans/{id}/assessments/latest` | 查询最近判定 |
+| `PATCH` | `/v1/plans/{id}/assessments` | 创建一致性判定（完成后仅允许重放或受控补判定） |
+| `GET` | `/v1/plans/{id}/assessments` | 分页查询计划的历史判定 |
+| `GET` | `/v1/plans/{id}/assessments/latest` | 查询最终（完成后）或最近判定 |
 
 ## 状态及失败行为
 
@@ -188,6 +189,8 @@ curl -sS -X PATCH http://127.0.0.1:8090/v1/plans/<plan_id>/assessments \
 - 一个节点同一时刻最多有一个 `claimed` 租约。
 - 相同请求键和相同内容可安全重放；同键异载荷返回 `idempotency_conflict`。
 - 一致性判定综合节点覆盖率、序列号、成功比例和最大延迟，返回 `consistent` 或 `review_required`。
+- 计划完成时匹配的判定冻结为最终解释（`final`，固化到 `final_assessment_id`）。完成后只可用已完成请求键重放或读取 `latest`/历史；用新请求键创建判定返回 `plan_terminal`（409）。
+- 完成后补判定必须在请求中显式携带 `allow_post_completion_supplement: true`，记录标记为 `supplemental`，只进历史，不覆盖最终/最近判定，也不推进计划版本。
 - 所有校验和冲突在快照替换前返回，不留下部分状态。
 
 ## 后续工程任务的行为边界

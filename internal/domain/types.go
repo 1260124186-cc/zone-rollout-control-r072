@@ -68,6 +68,7 @@ type RolloutPlan struct {
 	Version             uint64     `json:"version"`
 	LatestRevisionID    string     `json:"latest_revision_id,omitempty"`
 	LatestAssessmentID  string     `json:"latest_assessment_id,omitempty"`
+	FinalAssessmentID   string     `json:"final_assessment_id,omitempty"`
 	CreatedAt           time.Time  `json:"created_at"`
 	ActivatedAt         *time.Time `json:"activated_at,omitempty"`
 	CompletedAt         *time.Time `json:"completed_at,omitempty"`
@@ -130,6 +131,8 @@ type RolloutAssessment struct {
 	SuccessCount     int       `json:"success_count"`
 	SuccessRatio     float64   `json:"success_ratio"`
 	MaximumLatencyMS int       `json:"maximum_latency_ms"`
+	Final            bool      `json:"final"`
+	Supplemental     bool      `json:"supplemental"`
 	CreatedAt        time.Time `json:"created_at"`
 }
 
@@ -170,4 +173,9 @@ type PlanPage struct {
 type NodePage struct {
 	Items []ResolverNode `json:"items"`
 	Meta  PageMeta       `json:"meta"`
+}
+
+type AssessmentPage struct {
+	Items []RolloutAssessment `json:"items"`
+	Meta  PageMeta            `json:"meta"`
 }

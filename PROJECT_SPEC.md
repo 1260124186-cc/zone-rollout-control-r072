@@ -26,7 +26,8 @@ Zone Rollout Control 是面向 DNS 运维人员的 Go HTTP 控制面。它把区
 - `expected_nodes`：计划预期参与的节点数，范围为 1 到 500。
 - `version`：每次计划聚合变化后递增。
 - `latest_revision_id`：最近一次添加的区域版本。
-- `latest_assessment_id`：最近一次完成的一致性判定。
+- `latest_assessment_id`：最近一次完成的一致性判定；计划完成后冻结，不再被补判定覆盖。
+- `final_assessment_id`：完成时匹配的判定，作为最终上线解释永久冻结；完成时无判定则为空。
 - `created_at`、`activated_at`、`completed_at`：RFC3339 时间。
 
 ### ZoneRevision
@@ -80,6 +81,8 @@ Zone Rollout Control 是面向 DNS 运维人员的 Go HTTP 控制面。它把区
 - `verdict`：`consistent` 或 `review_required`。
 - `reasons`：稳定原因代码列表。
 - `probe_count`、`success_count`、`success_ratio`、`maximum_latency_ms`。
+- `final`：是否为计划完成时冻结的最终判定。
+- `supplemental`：是否为完成后通过受控例外补写的补充判定；补充判定只进历史，不改变最终解释。
 - `created_at`。
 
 ## 4. 状态和规则
@@ -94,6 +97,8 @@ draft --activate--> active --complete--> completed
 - 只有 `active` 可以完成。
 - 激活后不能继续添加区域版本。
 - 激活和完成需要匹配当前版本。
+- 完成时把当前 `latest_assessment_id` 冻结为不可变的 `final_assessment_id`，并把该判定标记为 `final`；无判定时 `final_assessment_id` 为空。
+- 完成后计划摘要与版本不再因判定而变化。
 
 ### 节点与租约生命周期
 
@@ -141,6 +146,16 @@ ready --lease--> leased --report--> ready
 - `serial_mismatch`
 - `success_ratio_below_minimum`
 - `latency_limit_exceeded`
+
+### 判定终态与重放
+
+- 完成前流程保持不变：每个新请求键生成一个判定并更新 `latest_assessment_id`。
+- 计划完成时匹配的判定成为最终解释：冻结为 `final_assessment_id`，该判定记录标记 `final`。
+- 完成后只接受两类操作：
+  - 用已完成请求键重放，返回其原始判定，不修改任何状态。
+  - 读取 `latest`（返回冻结的最终判定）或历史列表（包含最终判定与全部补充判定）。
+- 完成后使用新请求键创建判定返回 `plan_terminal`（HTTP 409），计划摘要与 `latest` 不变。
+- 受控例外：请求显式携带 `allow_post_completion_supplement: true` 时，允许在完成后补写判定。补写记录标记 `supplemental`，仅写入历史与幂等索引并记审计，不覆盖 `final_assessment_id`、`latest_assessment_id`，也不推进计划版本；该例外不静默生效。
 
 ## 5. 工作流
 
@@ -200,17 +215,18 @@ ready --lease--> leased --report--> ready
 
 - `PATCH /v1/plans/{id}/assessments`
 - `GET /v1/plans/{id}/assessments/latest`
+- `GET /v1/plans/{id}/assessments`
 
 步骤：
 
 1. 入口校验计划、请求键和最新区域版本。
 2. 判定服务收集计划探针并按节点分组。
 3. 纯领域计算器生成比例、原因和最终结论。
-4. 存储层写入不可变判定并更新计划摘要。
+4. 存储层写入不可变判定并更新计划摘要；计划完成时冻结最终判定。
 
-成功行为：返回确定性的 `consistent` 或 `review_required`。
+成功行为：完成前返回确定性的 `consistent` 或 `review_required`；完成后已完成请求键原样重放，`latest` 返回冻结的最终判定，历史列表可查询最终与全部补充判定。
 
-失败行为：缺少区域版本、没有探针、请求键冲突或保存失败不会更新计划摘要。
+失败行为：缺少区域版本、没有探针、请求键冲突或保存失败不会更新计划摘要；完成后使用新请求键返回 `plan_terminal`。仅当请求显式声明 `allow_post_completion_supplement` 时才补写 `supplemental` 记录，且不改变最终解释。
 
 ## 6. 模块边界
 
@@ -259,6 +275,7 @@ ready --lease--> leased --report--> ready
 - `PATCH /v1/leases/{id}/release`
 - `PATCH /v1/leases/{id}/probes`
 - `PATCH /v1/plans/{id}/assessments`
+- `GET /v1/plans/{id}/assessments`
 - `GET /v1/plans/{id}/assessments/latest`
 
 ## 8. 工程机制
@@ -282,5 +299,6 @@ ready --lease--> leased --report--> ready
 2. 节点分配、租约唯一性、幂等重放和无可用节点冲突。
 3. 探针首写、同键重放、同键异载荷冲突和释放冲突。
 4. 一致性通过、审核触发、最新结果查询和幂等重放。
+5. 完成终态：完成时冻结最终判定；完成后新请求键返回 `plan_terminal`，已完成请求键可重放，`latest` 不变，历史可查询，显式受控例外补写的 `supplemental` 判定不覆盖最终解释。
 
 每条探针使用独立临时目录，不访问外部网络，结束后关闭服务。

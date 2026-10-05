@@ -53,7 +53,8 @@ type ProbeInput struct {
 }
 
 type AssessmentInput struct {
-	RequestKey string `json:"request_key"`
+	RequestKey                    string `json:"request_key"`
+	AllowPostCompletionSupplement bool   `json:"allow_post_completion_supplement"`
 }
 
 func NormalizePlanInput(input PlanCreateInput) PlanCreateInput {

@@ -19,6 +19,7 @@ const (
 	CodeLeaseNotClaimed     ErrorCode = "lease_not_claimed"
 	CodeNoProbes            ErrorCode = "no_probes"
 	CodeConflict            ErrorCode = "conflict"
+	CodePlanTerminal        ErrorCode = "plan_terminal"
 	CodeStorageFailure      ErrorCode = "storage_failure"
 	CodeInternal            ErrorCode = "internal_error"
 )
@@ -61,4 +62,8 @@ func Validation(message string, details map[string]any) *DomainError {
 
 func InvalidState(message string, details map[string]any) *DomainError {
 	return NewError(CodeInvalidState, message, details)
+}
+
+func PlanTerminal(message string, details map[string]any) *DomainError {
+	return NewError(CodePlanTerminal, message, details)
 }
